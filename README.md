@@ -12,7 +12,12 @@
 
 ## 快速开始
 
-需要 Rust stable + MSVC 工具链。WebView2 是 Windows 11 自带的，不用装。
+**只想用**：下载 `HoverNote_0.1.0_x64-setup.exe`，双击，下一步到底。不需要装 Rust，
+不需要命令行，不需要管理员权限——装在 `%LOCALAPPDATA%\HoverNote\`，只动当前用户。
+装完会登记登录自启，想关的话在「设置 → 应用 → 启动」里关掉就行。笔记存在
+`%USERPROFILE%\Documents\HoverNote\`。
+
+**要改代码**：需要 Rust stable + MSVC 工具链。WebView2 是 Windows 11 自带的，不用装。
 
 ```bash
 git clone https://github.com/fatassasin/HoverNote
@@ -20,14 +25,17 @@ cd HoverNote/src-tauri
 cargo build --release
 ```
 
-然后双击项目根目录的 `安装.bat`（装到当前用户目录，不需要管理员权限）。
-笔记默认存在 `%USERPROFILE%\Documents\HoverNote\`，想换个地方：
+然后双击项目根目录的 `安装.bat`（同样装在当前用户目录、不要管理员权限，但装的是
+你刚编出来的那份，装到 `%LOCALAPPDATA%\Programs\HoverNote\`）。想换笔记目录：
 
 ```bash
 powershell -ExecutionPolicy Bypass -File tools/install.ps1 -DataDir "D:\我的笔记"
 ```
 
-细节见下面的[一键安装](#一键安装)和[数据](#数据)两节。
+两条路装出来的是**两份独立的安装**，目录不同但开始菜单和启动文件夹里的快捷方式
+同名，会互相覆盖。混着用之前先把另一份卸掉，细节见下面的[一键安装](#一键安装)。
+
+细节见[打包](#打包)、[一键安装](#一键安装)和[数据](#数据)三节。
 
 ## 为什么是 Tauri 而不是 Electron
 
@@ -165,11 +173,7 @@ powershell -ExecutionPolicy Bypass -File tools/install.ps1 -DataDir "D:\我的�
 cd src-tauri && cargo run
 ```
 
-打包成安装器：
-
-```bash
-cd src-tauri && cargo tauri build
-```
+打包成安装器：见下面的[打包](#打包)一节。
 
 重新生成图标（换了 `tools/assets/` 下那两张源图之后）：
 
@@ -272,7 +276,38 @@ DPI 则是因为同样分辨率配不同缩放是两种完全不同的观感，�
 `tools/display-probe.ps1` 把系统里实际有的显示器、每个窗口算出来的指纹、和存档里
 那张表并排列出来，用来确认三者对得上。
 
+## 打包
+
+出一个双击就能装的 NSIS 安装器：
+
+```bash
+cargo install tauri-cli --version "^2.0" --locked   # 只需一次
+cd src-tauri && cargo tauri build
+```
+
+产物在 `src-tauri/target/release/bundle/nsis/HoverNote_<版本>_x64-setup.exe`，1.4 MB
+左右。**只有打包的人需要 Rust 和 tauri-cli，装的人什么都不需要。** 安装器装到
+`%LOCALAPPDATA%\HoverNote\`，不要管理员权限，建开始菜单快捷方式，最后一页可勾选
+立即运行；界面跟随系统语言在简中和英文之间选。
+
+Tauri 的默认模板不管**登录自启**，这一件事由 `src-tauri/nsis-hooks.nsh` 补上，规则和
+`tools/install.ps1` 完全一致：只在「启动」文件夹放一枚快捷方式，不写 HKCU 的 `Run`
+键（理由见[一键安装](#一键安装)），并清掉 `StartupApproved` 下可能残留的禁用记录。
+卸载时这几处一并撤掉——它们都在安装目录之外，模板删目录带不走，留着就是一枚指向已
+删除 exe 的快捷方式，每次登录都去拉一个不存在的程序。
+
+`nsis-hooks.nsh` 存成 **UTF-8 with BOM**。makensis 在 `Unicode true` 下靠 BOM 判编码，
+没有 BOM 时它按 ANSI 读，遇到中文注释直接报 `Bad text encoding` 整个构建失败——这一条
+是硬错误不是静默降级，所以不会出现「装完了才发现自启没生效」。
+
+钩子里取主程序名走 `${MAINBINARYNAME}` 而不是写死 `HoverNote.exe`：那个值是 **Cargo 的
+crate 名 `hovernote`**（小写），不是 `productName`，而安装器释放出来的文件就叫
+`hovernote.exe`。快捷方式指错文件是不报错的，只是开机之后什么都不发生。
+
 ## 一键安装
+
+这一节讲的是**从源码装**的那条路（`安装.bat` / `tools/install.ps1`）。只想用现成
+安装器的话看上面的[打包](#打包)。
 
 先构建 release，然后双击项目根目录的 `安装.bat`。脚本使用当前用户目录安装，
 无需管理员权限；它会创建可搜索的开始菜单快捷方式、登记登录后自动启动、复制自定义
@@ -299,6 +334,22 @@ powershell -ExecutionPolicy Bypass -File tools/install.ps1 -Uninstall
 冷启动要等 WebView2 起来，实测约 30–40 秒才会看到折角，之后常驻内存约 26 MB。
 这段时间里进程已经在跑，只是窗口还没建出来。
 
+### 和安装器混用
+
+两条路装出来的是两份独立的安装，装在不同目录（`%LOCALAPPDATA%\Programs\HoverNote\`
+对 `%LOCALAPPDATA%\HoverNote\`），但**开始菜单和启动文件夹里的快捷方式同名**，谁后装
+谁覆盖。程序有单实例互斥体，两份同时被拉起来时后一个会直接退出，所以不会真的跑起来
+两个，但会留下一个白占十来兆的孤儿目录。
+
+要换过去，**顺序不能反**：先卸旧的，再装新的。
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/install.ps1 -Uninstall
+```
+
+反过来的话，`-Uninstall` 会把安装器刚放好的同名快捷方式一起删掉——它按名字删，
+认不出那是谁的。笔记两边共用同一个目录，怎么折腾都不受影响。
+
 ## 结构
 
 ```
@@ -313,6 +364,7 @@ src-tauri/src/
   lib.rs           窗口编排、贴角、拖角、自动隐藏、托盘
   platform.rs      Win32：DWM 圆角/边框、窗口样式、工作区、光标、置顶重排、显示指纹
   state.rs         持久化、笔记目录解析、回收站
+src-tauri/nsis-hooks.nsh  安装器钩子：登录自启的登记与撤销（UTF-8 with BOM）
 tools/install.ps1    安装/卸载/设笔记目录（-DataDir）
 tools/assets/fold-reference.webp  卷角原图，折角小窗的来源
 tools/assets/app-icon.png         成品应用图标，exe/托盘/快捷方式的来源

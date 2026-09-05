@@ -1,0 +1,756 @@
+/* 笔记面板：窗口本身是透明的，底色完全由这里的 CSS 决定——黑色半透明，
+   桌面直接透过来。不走系统亚克力，原因见 README。 */
+
+.shell {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* 窗口本身是透明的，这一层就是全部的底色：中性深灰半透明，桌面从后面透过来。
+     不走系统亚克力，原因见 README。透明度要压得住正文——太透了字会和底下的桌面
+     糊在一起看不清；底色从近黑抬到深灰之后更需要这一点，因为透过来的桌面会把灰搅浑。 */
+  background: rgba(38, 38, 38, 0.88);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+
+/* ------------------------------------------------------------ 缩放热区 */
+
+.rz {
+  position: fixed;
+  z-index: 40;
+}
+.rz.n { top: 0; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.rz.s { bottom: 0; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.rz.w { left: 0; top: 6px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.rz.e { right: 0; top: 6px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.rz.nw { top: 0; left: 0; width: 11px; height: 11px; cursor: nwse-resize; }
+.rz.se { bottom: 0; right: 0; width: 11px; height: 11px; cursor: nwse-resize; }
+.rz.ne { top: 0; right: 0; width: 11px; height: 11px; cursor: nesw-resize; }
+.rz.sw { bottom: 0; left: 0; width: 11px; height: 11px; cursor: nesw-resize; }
+
+/* -------------------------------------------------------------- 顶栏 */
+
+.topbar {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+  height: 34px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+/* 书签：贴住上边缘，只有下方两角是圆的，像一枚可以往下拉的页签 */
+.tabmark {
+  margin-left: 13px;
+  width: 30px;
+  height: 22px;
+  border-radius: 0 0 9px 9px;
+  color: var(--faint);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);
+  transition:
+    height 0.18s var(--ease),
+    color 0.16s var(--ease),
+    background 0.16s var(--ease);
+}
+
+.tabmark svg {
+  transition: transform 0.22s var(--ease);
+}
+
+.tabmark:hover,
+body.drawer-open .tabmark {
+  height: 26px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+body.drawer-open .tabmark svg {
+  transform: rotate(180deg);
+}
+
+.ctl {
+  margin: 5px 9px 0 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--dim);
+  transition:
+    color 0.16s var(--ease),
+    background 0.16s var(--ease);
+}
+
+.ctl:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* 放大 / 缩回 用同一枚按钮，按状态换图形 */
+.ico-in { display: none; }
+body.expanded .ico-out { display: none; }
+body.expanded .ico-in { display: block; }
+
+/* ------------------------------------------------------------ 笔记栏 */
+
+.drawer {
+  position: absolute;
+  z-index: 30;
+  top: 30px;
+  left: 8px;
+  right: 8px;
+  max-height: calc(100% - 74px);
+  overflow: hidden auto;
+  padding: 5px;
+  border-radius: 11px;
+  background: rgba(48, 48, 48, 0.96);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 12px 28px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+  transition:
+    opacity 0.16s var(--ease),
+    transform 0.2s var(--ease);
+}
+
+body.drawer-open .drawer {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.notes {
+  list-style: none;
+}
+
+.note {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 4px 0 8px;
+  border-radius: 8px;
+  transition: background 0.12s var(--ease);
+}
+
+.note:hover {
+  background: var(--hover);
+}
+
+.note.active {
+  background: var(--sel);
+}
+
+.note .dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--faint);
+  transition: background 0.12s var(--ease);
+}
+
+.note.active .dot {
+  background: #d8d8e0;
+}
+
+/* 名字平时就是一段纯文本，直到真的在改名才显出输入框的样子。
+   鼠标浮上去不给框：这个列表主要是用来切笔记的，划过一行就冒出个输入框，
+   看起来像随时会被改掉，而实际上单击并不进入编辑。行本身的高亮已经够指示了。
+
+   组名走同一套：改名的手势、样式都和笔记一致，只有字重不同。 */
+.note .name,
+.grp .name {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  outline: none;
+  text-overflow: ellipsis;
+  cursor: default;
+  transition:
+    background 0.12s var(--ease),
+    border-color 0.12s var(--ease),
+    color 0.12s var(--ease);
+}
+
+.note.active .name {
+  color: var(--text);
+}
+
+/* 悬停只把字提亮，不动边框和底色 */
+.note:hover .name,
+.grp:hover .name {
+  color: var(--text);
+}
+
+.note .name:not([readonly]),
+.grp .name:not([readonly]) {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(24, 24, 24, 0.55);
+  color: #fff;
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.note .del,
+.grp .del {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: var(--faint);
+  opacity: 0;
+  transition:
+    opacity 0.12s var(--ease),
+    color 0.12s var(--ease),
+    background 0.12s var(--ease);
+}
+
+.note:hover .del,
+.grp:hover .del {
+  opacity: 1;
+}
+
+.note .del:hover,
+.grp .del:hover {
+  color: #ff8b8b;
+  background: rgba(255, 90, 90, 0.14);
+}
+
+.drawer .empty {
+  padding: 9px 10px;
+  color: var(--faint);
+}
+
+/* 列表末尾的新建行。和上面的笔记行同高、同圆角、同悬停反馈——它是列表的一部分，
+   不该看起来像浮在下面的另一个控件。图标落在圆点那一列、文字和笔记名左对齐，
+   两条竖线因此是连续的。 */
+.addrow {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 30px;
+  margin-top: 2px;
+  border-radius: 8px;
+  color: var(--faint);
+  transition:
+    color 0.12s var(--ease),
+    background 0.12s var(--ease);
+}
+
+.addrow .ico {
+  flex: 0 0 auto;
+  /* 4.5 + 12/2 = 10.5，正好是笔记行那个圆点的中心（左内边距 8 + 半径 2.5） */
+  margin-left: 4.5px;
+}
+
+.addrow .label {
+  /* 4.5 + 12 + 9.5 = 26，和笔记名的左边缘对齐（8 + 圆点 5 + 间距 7 + 内边距 6） */
+  padding-left: 9.5px;
+}
+
+.addrow:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* -------------------------------------------------------------- 分组 */
+
+/* 组的标题行。和笔记行同高同圆角——它是列表里的一行，不是另一种控件。
+   左边那枚折叠键用负外边距把 20px 的点击范围收进 12px 的视觉宽度里，
+   于是组名的左边缘和顶层笔记名对齐（8 + 12 + 4 + 6 = 26px），
+   看上去是同一层，而不是被推进去半格。 */
+.grp {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 4px 0 8px;
+  border-radius: 8px;
+  transition: background 0.12s var(--ease);
+}
+
+.grp:hover {
+  background: var(--hover);
+}
+
+.grp .name {
+  font-weight: 600;
+}
+
+.grp .gtog {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 22px;
+  margin: 0 -4px;
+  border-radius: 6px;
+  color: var(--faint);
+  transition: color 0.12s var(--ease);
+}
+
+.grp:hover .gtog {
+  color: var(--dim);
+}
+
+.grp .gtog svg {
+  transition: transform 0.18s var(--ease);
+}
+
+.grp.shut .gtog svg {
+  transform: rotate(-90deg);
+}
+
+/* 只在收起时报数：展开着的时候成员就摆在下面，数字是多余的；收起来之后
+   这是唯一还能看出「里面有几篇」的线索。 */
+.grp .gnum {
+  flex: 0 0 auto;
+  min-width: 17px;
+  padding: 0 4px;
+  border-radius: 5px;
+  color: var(--faint);
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* 解散键不染红。它不删任何东西，笔记只是回到顶层——和隔壁那枚真的会删掉
+   一篇笔记的 × 用同样的红色，迟早会按错。 */
+.grp .gdis:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* 组里的笔记往里缩，左边拉一条竖线。行与行之间没有间隙，每行各画一段，
+   接起来就是连续的一条，一眼能看出这个组管到哪儿为止。 */
+.note.sub {
+  margin-left: 14px;
+}
+
+.note.sub::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* -------------------------------------------------------------- 拖拽 */
+
+/* 插入位置的横线。挂在 .drawer 里（它是定位元素），所以抽屉滚动时跟着一起走。
+   左右各留 5px 和行对齐；落点在组里就往右缩一格，缩进本身就是「会放进组里」
+   的提示，不用再写字说明。 */
+.dropline {
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  height: 2px;
+  border-radius: 1px;
+  background: #d8d8e0;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.1s var(--ease),
+    left 0.12s var(--ease);
+}
+
+.dropline.on {
+  opacity: 1;
+}
+
+.dropline.sub {
+  left: 19px;
+}
+
+/* 跟着光标走的那一份。position: fixed + transform，不进文档流，
+   也就不会把底下的列表挤得跳来跳去。 */
+.ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 60;
+  margin: 0;
+  pointer-events: none;
+  border-radius: 8px;
+  background: rgba(58, 58, 58, 0.97);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 10px 24px rgba(0, 0, 0, 0.5);
+}
+
+.ghost::before {
+  display: none; /* 克隆的是组内行时会把那条竖线也带过来 */
+}
+
+body.dragging {
+  cursor: grabbing;
+}
+
+/* 拖动中关掉行的过渡：落点一变底色就得立刻跟上，慢慢淡过去会跟不上手。 */
+body.dragging .note,
+body.dragging .grp {
+  transition: none;
+}
+
+body.dragging .drag-src {
+  opacity: 0.3;
+}
+
+/* 拖动中不弹删除键：手正忙着，露出一枚点了就少一篇笔记的按钮没有好处。 */
+body.dragging .note:hover .del,
+body.dragging .grp:hover .del {
+  opacity: 0;
+}
+
+/* 「摞上去并成一组」的落点。描一圈实线圈住整行，和插入横线是两种截然不同的
+   图形——这两个动作的结果差得远，提示长得像就会按错。
+   放在 :hover / .active 后面：同特异度，靠顺序压住它们。 */
+.note.drop-into,
+.grp.drop-into {
+  background: var(--sel);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.55);
+}
+
+
+/* -------------------------------------------------------------- 查找条 */
+
+/* 顶上浮出来的一小片，不横跨两侧。横跨的话会把顶栏连同书签、放大键一起盖掉，
+   而它只是个临时状态——看着不该像换了一个界面。居中还有个附带好处：两个上角
+   都不碰，折角在哪个角都不用给它让位。
+
+   只有一圈描边，不铺底、不投影：底下的正文该多清楚就多清楚，和主界面完全一致。 */
+.find {
+  position: absolute;
+  z-index: 45;
+  top: 5px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  /* 两边各留 54px 给书签和放大键，窄面板下也不会压到它们 */
+  width: min(262px, calc(100% - 108px));
+  padding: 3px 3px 3px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 9px;
+  background: transparent;
+  /* 收起时推到自己高度以上。.shell 是 overflow: hidden，推上去就被切掉了——
+     但 pointer-events 还是要关，否则看不见的输入框仍然能吃到点击。 */
+  transform: translate(-50%, -170%);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 0.2s var(--ease),
+    opacity 0.14s var(--ease),
+    border-color 0.12s var(--ease);
+}
+
+body.find-open .find {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 框中框看着太吵。外面那圈已经把这块地方圈出来了，输入框自己就是一段可以打字的
+   文本，不用再描一遍。 */
+.find .q {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.find .q::placeholder {
+  color: var(--faint);
+}
+
+/* 有关键词却一处都没匹配上，把外圈描红。计数已经去掉了，这是唯一的"没找到"信号，
+   所以不能再省——不然打错一个字和这篇真的没有，看起来一模一样。 */
+.find.miss {
+  border-color: rgba(255, 120, 120, 0.55);
+}
+
+.find .btn {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--faint);
+  transition:
+    color 0.12s var(--ease),
+    background 0.12s var(--ease);
+}
+
+.find .btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* ------------------------------------------------- 给折角让位
+
+   面板贴死在角上，那枚 28px 的折角会压在它自己的角上。距离角 (dx,dy) 的点
+   被盖住的条件约为 dx + dy <= 28，所以只把同角控件轻轻向内挪开；不再沿用
+   旧 56px 折角留下的大块空白。 */
+
+body.orb-tl .tabmark {
+  margin-left: 34px;
+}
+
+body.orb-tr .ctl {
+  margin-right: 25px;
+}
+
+body.orb-br .fab {
+  right: 16px;
+  bottom: 16px;
+}
+
+/* 放大态是居中的，折角还在屏幕角上，够不着面板——让位就没必要了 */
+body.expanded.orb-tl .tabmark {
+  margin-left: 13px;
+}
+body.expanded.orb-tr .ctl {
+  margin-right: 9px;
+}
+body.expanded.orb-br .fab {
+  right: 13px;
+  bottom: 13px;
+}
+
+/* -------------------------------------------------------------- 编辑区 */
+
+.editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.doc {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 16px 46px;
+  overflow: hidden auto;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.72;
+  /* 源码里的空格和换行必须原样留住——缩进是列表层级的唯一依据，
+     而且光标偏移是按字符数算的，折叠空白会让它和源码对不上。 */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+.doc.blank::before {
+  content: "写点什么…";
+  position: absolute;
+  color: var(--faint);
+  pointer-events: none;
+}
+
+/* 放大态下限宽居中，免得一行拉满一千多像素没法读 */
+body.expanded .doc {
+  font-size: 14.5px;
+  padding: 8px max(24px, calc((100% - 760px) / 2)) 56px;
+}
+
+/* ------------------------------------------------- 正文里的 Markdown
+
+   每一行是一个 .ln。符号没有被删掉，只是淡显——DOM 里的文本和源码逐字一致，
+   光标偏移就是字符偏移，选区/复制/方向键都不用另做映射。详见 js/markdown.js。 */
+
+.ln {
+  min-height: 1.72em;
+}
+
+/* 淡显用带 alpha 的颜色，不用 opacity。opacity 会建一个合成组，把子元素一起蒙下去——
+   查找命中如果正好落在符号上，橙色底会跟着一起变虚。写进 color 里只影响文字本身。
+   下面这几个 rgba 就是 --faint(#7a7a7a) 乘上原来的那几档不透明度。 */
+.mk {
+  color: rgba(122, 122, 122, 0.42);
+  font-weight: 400;
+}
+
+/* 光标落在哪一行，那一行的符号就回到正常亮度，方便改 */
+.ln.on .mk {
+  color: var(--faint);
+}
+
+.ln.h1 {
+  font-size: 1.5em;
+  font-weight: 650;
+  line-height: 1.45;
+  margin-top: 0.45em;
+}
+.ln.h2 {
+  font-size: 1.28em;
+  font-weight: 650;
+  line-height: 1.5;
+  margin-top: 0.4em;
+}
+.ln.h3 {
+  font-size: 1.12em;
+  font-weight: 650;
+}
+.ln.h4,
+.ln.h5,
+.ln.h6 {
+  font-weight: 650;
+}
+
+.ln strong {
+  font-weight: 700;
+  color: #fff;
+}
+
+.ln em {
+  font-style: italic;
+}
+
+.ln del {
+  color: var(--dim);
+  text-decoration: line-through;
+}
+
+.ln a {
+  color: #8ab4f8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ln code {
+  padding: 0.1em 0.32em;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 0.92em;
+}
+
+/* 列表：悬挂缩进，折行的部分和第一行的文字对齐，不缩回符号底下 */
+.ln.li {
+  padding-left: 1.4em;
+  text-indent: -1.4em;
+}
+
+.ln.quote {
+  padding-left: 9px;
+  border-left: 2px solid rgba(255, 255, 255, 0.2);
+  color: var(--dim);
+}
+
+/* 分隔线本身还是三个字符，得留着（偏移要对得上），淡到几乎看不见就行 */
+.ln.hr {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.17);
+}
+.ln.hr .mk {
+  color: rgba(122, 122, 122, 0.16);
+}
+.ln.hr.on .mk {
+  color: var(--faint);
+}
+
+.ln.code {
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.055);
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 0.92em;
+}
+
+/* 查找命中。<mark> 只包文本节点，不会包住 <strong>/<code> 这些，所以样式上
+   只要管住底色和字色——命中那一段的粗体、标题字号原样保留。
+   UA 默认给 mark 的是黄底黑字，两样都得盖掉。 */
+.ln mark {
+  border-radius: 3px;
+  background: rgba(255, 149, 0, 0.26);
+  /* 继承下来的颜色才对：命中落在链接上就还是蓝的，落在引用里就还是灰的 */
+  color: inherit;
+}
+
+/* 当前这一处填实，好在一片橙里认出翻到了哪个。底色实了就得配深色字——
+   写在 mark 自己身上，这样即使它在 <strong> 里面（那条规则给的是白字）也压得住。 */
+.ln mark.cur {
+  background: rgba(255, 149, 0, 0.78);
+  color: #1c1c1c;
+}
+
+.doc::-webkit-scrollbar {
+  width: 9px;
+}
+.doc::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-clip: content-box;
+  background-color: rgba(255, 255, 255, 0.16);
+}
+.doc::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.drawer::-webkit-scrollbar {
+  width: 8px;
+}
+.drawer::-webkit-scrollbar-thumb {
+  border: 2.5px solid transparent;
+  border-radius: 6px;
+  background-clip: content-box;
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+/* ---------------------------------------------------------- 新建按钮 */
+
+.fab {
+  position: absolute;
+  z-index: 50;
+  right: 13px;
+  bottom: 13px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.13),
+    0 4px 12px rgba(0, 0, 0, 0.38);
+  transition:
+    transform 0.16s var(--ease),
+    color 0.16s var(--ease),
+    background 0.16s var(--ease);
+}
+
+.fab:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+  transform: scale(1.08);
+}
+
+.fab:active {
+  transform: scale(0.94);
+  transition-duration: 0.07s;
+}

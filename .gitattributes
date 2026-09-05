@@ -1,0 +1,20 @@
+# 仓库里一律存 LF，检出到 Windows 时按下面的规则给。
+* text=auto eol=lf
+
+# 这两类必须是 CRLF。PowerShell 和 cmd 对纯 LF 的脚本时灵时不灵——批处理尤其，
+# 它是一行一行读着执行的，行尾少个 CR 会让 goto/label 和续行整个错位。
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制，别做任何换行转换，也别在 diff 里展开
+*.png  binary
+*.ico  binary
+*.webp binary
+
+# Cargo.lock 是生成的：在 PR 的 diff 里默认折叠，但仍然参与合并和版本控制
+Cargo.lock linguist-generated=true
+
+# GitHub 的语言统计别把验证脚本算成项目主语言——tools/ 下除了安装脚本
+# 都是一次性的探针，不是这个项目要展示的东西。
+tools/*.ps1 linguist-vendored=true

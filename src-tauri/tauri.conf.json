@@ -1,0 +1,68 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HoverNote",
+  "version": "0.1.0",
+  "identifier": "com.shawn.hovernote",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    },
+    "windows": [
+      {
+        "label": "orb",
+        "title": "HoverNote",
+        "url": "orb.html",
+        "width": 28,
+        "height": 28,
+        "minWidth": 28,
+        "minHeight": 28,
+        "maxWidth": 28,
+        "maxHeight": 28,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false
+      },
+      {
+        "label": "panel",
+        "title": "HoverNote",
+        "url": "index.html",
+        "width": 380,
+        "height": 470,
+        "minWidth": 268,
+        "minHeight": 208,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

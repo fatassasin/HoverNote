@@ -1,0 +1,67 @@
+/* 折角图标窗口 28×28：卷角的直角顶点就是屏幕的角，不留任何边距。
+   图本身是 tools/gen-icons.py 从用户给的原图重采样来的，不再手绘。 */
+
+body {
+  overflow: hidden;
+}
+
+.orb {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* 图是整块方形的，只有 #hit 接事件——卷角以外那半是透明的，
+     点击要能穿到桌面上去 */
+  pointer-events: none;
+  transition: filter 0.16s var(--ease);
+}
+
+.orb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* 缩到 28px 还要保住卷口那条亮边，用高质量缩放 */
+  image-rendering: auto;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* 命中区：沿卷角轮廓裁出来的多边形，顶点是从原图 alpha 通道上量的
+   （每一行最左边不透明的位置）。方形图的左上那一大半不接事件。 */
+#hit {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  clip-path: polygon(
+    100% 18%,
+    99.6% 20%,
+    96.3% 30%,
+    89.6% 40%,
+    75.4% 50%,
+    66.6% 55%,
+    58.2% 70%,
+    50.2% 80%,
+    40% 90%,
+    17.4% 100%,
+    100% 100%
+  );
+}
+
+/* 不能用 scale 做悬停反馈——一缩放折角就离开屏幕角了。只改亮度。 */
+.orb:has(#hit:hover) {
+  filter: brightness(1.18);
+}
+
+body.dragging .orb {
+  filter: brightness(1.3);
+}
+
+/* 换角就整体镜像，卷边、明暗和投影跟着一起翻 */
+body.corner-bl .orb {
+  transform: scaleX(-1);
+}
+body.corner-tr .orb {
+  transform: scaleY(-1);
+}
+body.corner-tl .orb {
+  transform: scale(-1, -1);
+}

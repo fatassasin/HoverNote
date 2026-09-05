@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>HoverNote</title>
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/orb.css" />
+  </head>
+  <body>
+    <!-- 直接用原图，不再手绘近似。assets/fold.png 由 tools/gen-icons.py 从
+         tools/assets/fold-reference.webp 重采样得到——那张原图的白纸部分本身
+         就是透明的，正好是"只有卷角、其余留空"的形式，卷角的直角顶点也已经
+         顶在右下角上（实测离边 2/1254 px），贴到屏幕角上就是严丝合缝。
+         默认是右下角，其余三个角由 body 上的 corner-* 类整体镜像。 -->
+    <div class="orb" id="orb" title="HoverNote　浮上来展开 · 拖到别的角">
+      <img src="assets/fold.png" alt="" draggable="false" />
+      <!-- 命中区。图是整块方形的，但卷角只占右下那一片，剩下的地方必须让
+           点击穿到桌面上去，所以单独拿一个按卷角轮廓裁出来的 div 接事件。
+           顶点是从原图的 alpha 通道上量出来的。 -->
+      <div id="hit"></div>
+    </div>
+    <script src="js/orb.js"></script>
+  </body>
+</html>

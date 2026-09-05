@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------- 构建产物
+
+/src-tauri/target/
+
+# Tauri 每次构建都会重新生成这些 schema，跟着 tauri 版本走，不该进版本库。
+/src-tauri/gen/schemas/
+
+# 注意 Cargo.lock 是**要提交**的：这是个应用不是库，锁死依赖版本才能保证
+# 别人 clone 下来编译出的东西和你手上这份一样。
+
+node_modules/
+__pycache__/
+*.pyc
+
+# ------------------------------------------------------------------ 笔记数据
+
+# 正常情况下笔记在 HOVERNOTE_DIR 或 %USERPROFILE%\Documents\HoverNote，本来就
+# 不在仓库里。这几条是防呆：万一有人把 HOVERNOTE_DIR 指到了仓库目录，或者在
+# 仓库里跑测试脚本，个人笔记不该因此被提交上去——这种事一旦推上公开仓库，
+# 删掉文件也没用，历史里还在。
+hovernote.json
+hovernote.bak
+hovernote.json.tmp
+hovernote.broken-*.json
+/trash/
+/Documents/
+
+# ---------------------------------------------------------------------- 杂项
+
+*.log
+Thumbs.db
+desktop.ini
+.DS_Store
+
+.vscode/
+.idea/
+*.swp
+*~
+
+# Claude Code 的本地设置里可能有机器专属的路径和权限白名单，不适合共享；
+# 项目级的 .claude/settings.json 和 CLAUDE.md 想提交的话是可以的。
+.claude/settings.local.json

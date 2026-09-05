@@ -1,0 +1,71 @@
+:root {
+  /* 窗口圆角对齐 Win11 DWM 的 8px，否则毛玻璃会从 CSS 圆角外露出直角 */
+  --radius: 8px;
+  /* 中性深灰：R=G=B。原来这几个值 b 比 r 高（#ececf1 / #8b8b96 / #61616b），
+     在近黑底上看不出来，但底色抬到深灰之后会整体泛紫。
+     dim/faint 同时调亮——背景从近黑变成深灰，对比度掉了，原来的灰字会发糊。 */
+  --text: #ececec;
+  --dim: #a0a0a0;
+  --faint: #7a7a7a;
+  --hair: rgba(255, 255, 255, 0.085);
+  --hover: rgba(255, 255, 255, 0.07);
+  --sel: rgba(255, 255, 255, 0.125);
+  --ease: cubic-bezier(0.22, 0.8, 0.28, 1);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  color: var(--text);
+  font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI",
+    system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: default;
+  display: grid;
+  place-items: center;
+  /* 关掉浏览器默认焦点圈。焦点落到顶栏按钮上时（比如在编辑区按 Tab），Chromium
+     会画一圈很亮的默认焦点圈，在这个纯黑小面板上非常刺眼。这里没有键盘导航的用法
+     （笔记名的输入框 tabIndex 都是 -1，编辑区自己有光标），而笔记名和正文那两处
+     早就 outline: none 了，按钮属于漏掉的。 */
+  outline: none;
+}
+
+svg {
+  display: block;
+}
+
+/* 线描图标的统一笔画。折页图标是填充+渐变的，不能被这条规则套住，
+   所以按类挂而不是挂在标签上。 */
+.ico {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

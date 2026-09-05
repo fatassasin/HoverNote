@@ -6,18 +6,37 @@
 
 ![HoverNote](docs/hero.webp)
 
-**仅支持 Windows 11。** 贴角、置顶、透明、DPI 跟随这几件事全部直接调 Win32
-（`user32` / `dwmapi`），没有跨平台兜底，在别的系统上编译不过。安装器 1.4 MB，
-装完占 3.6 MB，常驻内存约 26 MB（均为实测）。
+**只能在 Windows 11 上用。**
 
-## 快速开始
+## 安装
 
-**只想用**：下载 `HoverNote_0.1.0_x64-setup.exe`，双击，下一步到底。不需要装 Rust，
-不需要命令行，不需要管理员权限——装在 `%LOCALAPPDATA%\HoverNote\`，只动当前用户。
-装完会登记登录自启，想关的话在「设置 → 应用 → 启动」里关掉就行。笔记存在
-`%USERPROFILE%\Documents\HoverNote\`。
+### 方法一：下载安装器（推荐）
 
-**要改代码**：需要 Rust stable + MSVC 工具链。WebView2 是 Windows 11 自带的，不用装。
+到 **[Releases 页面](https://github.com/fatassasin/HoverNote/releases/latest)** 下载
+`HoverNote_0.1.0_x64-setup.exe`（1.4 MB），双击，一路点下一步。
+
+不用装 Rust，不用开命令行，不用管理员权限。装完屏幕右下角就会出现一枚折角，鼠标浮
+上去笔记展开，点一下收起。
+
+> **第一次启动要等半分钟左右**折角才出现，这段时间是在等系统的 WebView2 起来，不是
+> 没装上。
+>
+> Windows 可能弹一个蓝框「**已保护你的电脑**」——因为这个安装器没买代码签名证书。
+> 点「更多信息」→「仍要运行」。
+
+装完的默认行为，每一条都能改：
+
+| | 默认 | 想改的话 |
+| --- | --- | --- |
+| 装在哪 | `%LOCALAPPDATA%\HoverNote\`（只动当前用户） | 安装过程中那一页可以选 |
+| 开机自启 | 开 | 「设置 → 应用 → 启动」里关掉 |
+| 笔记存哪 | `%USERPROFILE%\Documents\HoverNote\` | 设环境变量 `HOVERNOTE_DIR`，见[数据](#数据) |
+| 怎么卸载 | 「设置 → 应用 → 已安装的应用」 | **卸载不会删笔记** |
+
+### 方法二：自己编译，用命令装
+
+想改代码，或者不愿意跑别人编好的二进制，就走这条。需要 Rust stable + MSVC 工具链；
+WebView2 是 Windows 11 自带的，不用另外装。
 
 ```bash
 git clone https://github.com/fatassasin/HoverNote
@@ -25,17 +44,35 @@ cd HoverNote/src-tauri
 cargo build --release
 ```
 
-然后双击项目根目录的 `安装.bat`（同样装在当前用户目录、不要管理员权限，但装的是
-你刚编出来的那份，装到 `%LOCALAPPDATA%\Programs\HoverNote\`）。想换笔记目录：
+编完回到项目根目录双击 `安装.bat` 就装好了。想带选项就直接调它转发的那个脚本：
 
 ```bash
+# 笔记存到别的地方
 powershell -ExecutionPolicy Bypass -File tools/install.ps1 -DataDir "D:\我的笔记"
+
+# 装，但不要开机自启
+powershell -ExecutionPolicy Bypass -File tools/install.ps1 -NoAutoStart
+
+# 卸载（同样不删笔记）
+powershell -ExecutionPolicy Bypass -File tools/install.ps1 -Uninstall
 ```
 
-两条路装出来的是**两份独立的安装**，目录不同但开始菜单和启动文件夹里的快捷方式
-同名，会互相覆盖。混着用之前先把另一份卸掉，细节见下面的[一键安装](#一键安装)。
+### 两种方法不要混着装
 
-细节见[打包](#打包)、[一键安装](#一键安装)和[数据](#数据)三节。
+装出来是**两份独立的程序**，目录不同（`%LOCALAPPDATA%\HoverNote\` 对
+`%LOCALAPPDATA%\Programs\HoverNote\`），但开始菜单和启动文件夹里的快捷方式**同名**，
+谁后装谁覆盖。要从一种换到另一种，**先把旧的卸干净，再装新的**——顺序反了会把刚装好
+的快捷方式一起删掉。细节见[一键安装](#一键安装)。
+
+笔记两边共用同一个目录，怎么折腾都不受影响。
+
+---
+
+以下是实现细节。只想用的话，读到这里就够了。
+
+贴角、置顶、透明、DPI 跟随这几件事全部直接调 Win32（`user32` / `dwmapi`），没有跨
+平台兜底，在别的系统上编译不过。安装器 1.4 MB，装完占 3.6 MB，常驻内存约 26 MB
+（均为实测）。
 
 ## 为什么是 Tauri 而不是 Electron
 
@@ -306,8 +343,9 @@ crate 名 `hovernote`**（小写），不是 `productName`，而安装器释放�
 
 ## 一键安装
 
-这一节讲的是**从源码装**的那条路（`安装.bat` / `tools/install.ps1`）。只想用现成
-安装器的话看上面的[打包](#打包)。
+这一节是[安装](#安装)里「方法二」的展开，讲**从源码装**那条路（`安装.bat` /
+`tools/install.ps1`）到底做了什么、以及为什么这么做。只想把程序用起来的话，上面
+那一节就够了。
 
 先构建 release，然后双击项目根目录的 `安装.bat`。脚本使用当前用户目录安装，
 无需管理员权限；它会创建可搜索的开始菜单快捷方式、登记登录后自动启动、复制自定义

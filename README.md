@@ -7,8 +7,8 @@
 ![HoverNote](docs/hero.webp)
 
 **仅支持 Windows 11。** 贴角、置顶、透明、DPI 跟随这几件事全部直接调 Win32
-（`user32` / `dwmapi`），没有跨平台兜底，在别的系统上编译不过。常驻内存约 26 MB，
-安装包 5–10 MB。
+（`user32` / `dwmapi`），没有跨平台兜底，在别的系统上编译不过。安装器 1.4 MB，
+装完占 3.6 MB，常驻内存约 26 MB（均为实测）。
 
 ## 快速开始
 
@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File tools/install.ps1 -DataDir "D:\我的�
 | | Tauri | Electron |
 | --- | --- | --- |
 | 空转内存 | 约 32 MB（实测） | 约 120–180 MB |
-| 安装包 | 5–10 MB | 150 MB+ |
+| 安装包 | 1.4 MB（实测） | 150 MB+ |
 | 渲染层 | 复用系统 WebView2 | 自带 Chromium |
 
 ## 交互

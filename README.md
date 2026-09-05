@@ -15,7 +15,7 @@
 需要 Rust stable + MSVC 工具链。WebView2 是 Windows 11 自带的，不用装。
 
 ```bash
-git clone <this-repo> && cd HoverNote/src-tauri && cargo build --release
+git clone https://github.com/fatassasin/HoverNote && cd HoverNote/src-tauri && cargo build --release
 ```
 
 然后双击项目根目录的 `安装.bat`（装到当前用户目录，不需要管理员权限）。

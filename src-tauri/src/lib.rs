@@ -347,6 +347,36 @@ fn raise_orb(app: &AppHandle) {
     }
 }
 
+/// 折角被别的窗口压住了就抬回来。
+///
+/// 置顶不是一劳永逸的（见 platform::buried_at）：折角只在面板显示时被抬过，一旦
+/// 有人插到它前面就再没人管——鼠标够不到卷角，`peek_panel` 一次都不会被调用，看
+/// 起来就是折角彻底失灵。实测折角曾整块被置顶全屏的 Localless 盖住。没有可靠的
+/// 通知点能知道「有人插到我前面了」，所以搭 400ms 校正这趟车顺手问一句，和贴角
+/// 校正一样是幂等的：没被压住就什么都不做。
+///
+/// 探点取折角窗口的中心。Win32 的命中测试认的是整个窗口矩形，和前端那块按卷角
+/// 轮廓裁出来的 `#hit` 无关，所以中心点就够用。
+///
+/// 面板的 z 不在这里管：它每次显示时由 `show_panel` 显式重排，那才是「呼出来却
+/// 看不见」的正解。这里只在折角确实被压住时连带抬一次——那种情形下面板即便开着
+/// 也多半一起沉了。
+fn raise_if_buried(app: &AppHandle) {
+    let Some(orb) = orb_of(app) else { return };
+    let Some(r) = rect_of(&orb) else { return };
+    let (cx, cy) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+    if !platform::buried_at(&orb, cx, cy) {
+        return;
+    }
+    if let Some(panel) = panel_of(app) {
+        if panel.is_visible().unwrap_or(false) {
+            platform::raise_to_top(&panel);
+        }
+    }
+    platform::raise_to_top(&orb);
+    tr!("折角被别的窗口压住，抬回置顶层最前");
+}
+
 /// 放大态该用的位置和尺寸（物理像素）。
 ///
 /// 存的是逻辑尺寸，按当前缩放换算，并夹回当前工作区——换了分辨率或者拔掉外接屏
@@ -510,6 +540,19 @@ fn show_panel(app: &AppHandle, shared: &Shared) {
     shared.hold_grace(650);
     let _ = panel.show();
     let _ = panel.set_always_on_top(true);
+    // 这一行是「悬停折角笔记不出来」的真正修复，不能省。
+    //
+    // 上面两行都排不动 z-order：`show()` 走的是 SW_SHOWNOACTIVATE 那一路，只改
+    // 可见性；`set_always_on_top(true)` 在窗口本来就置顶时被 tao 判成「状态没变」
+    // 直接跳过。于是面板从创建起 z 位置就没被主动排过一次。而 `WS_EX_TOPMOST` 只
+    // 保证**排进去的那一刻**在非置顶窗口前面，此后系统不再持续纠正——别的窗口被
+    // 抬到面板那个陈旧的 z 槽前面之后，面板就一直留在后面。
+    //
+    // 症状极具误导性：悬停是有效的，`peek_panel`、`show_panel` 都跑了，`is_visible()`
+    // 也确实变成 true，可你什么都看不见。实测面板 `visible=True topmost=True` 却
+    // 停在 z=93，面板正中央那一点归属另一个应用的窗口；显式重排一次之后 z 变成 16，
+    // 那一点立刻变回自己。见 platform::raise_to_top 的注释。
+    platform::raise_to_top(&panel);
     raise_orb(app);
     let _ = app.emit("hn:shown", ());
     tr!("show_panel rect={:?}", rect_of(&panel));
@@ -700,6 +743,18 @@ fn open_url(url: String) {
     }
 }
 
+/// 右键菜单的「粘贴」。键盘 Ctrl+V 走的是浏览器自己的 paste 事件，不经过这里。
+#[tauri::command]
+fn clipboard_read(app: AppHandle) -> Option<String> {
+    platform::clipboard_read(&panel_of(&app)?)
+}
+
+/// 右键菜单的「复制」。写的是源码那一段，不是渲染后的样子。
+#[tauri::command]
+fn clipboard_write(app: AppHandle, text: String) -> bool {
+    panel_of(&app).is_some_and(|p| platform::clipboard_write(&p, &text))
+}
+
 /// 记下放大态当前的位置和尺寸。放大后拖动和缩放都会改它，所以缩回前、
 /// 拖完、缩放完、退出前都要调一次，否则这些调整下次放大就丢了。
 fn remember_expanded(shared: &Shared, panel: &WebviewWindow) {
@@ -767,6 +822,32 @@ fn toggle_expand(app: AppHandle, shared: State<'_, Shared>) -> bool {
         expand(&app, &shared);
         true
     }
+}
+
+/// 记下正文字号的缩放倍率。贴角态和放大态各存一份，由前端按当前状态指定存哪份。
+///
+/// 存哪份不由后端自己读 `shared.expanded` 判断：切换那一瞬间前端和后端谁先看到
+/// 新状态是不确定的，万一后端还停在旧值上，这一下就会记到另一态头上——正是
+/// 「互相干扰」。前端调的时候自己是哪一态它最清楚，让它说。
+#[tauri::command]
+fn set_zoom(app: AppHandle, shared: State<'_, Shared>, expanded: bool, zoom: f32) {
+    let z = state::sane_zoom(zoom);
+    match shared.data.lock() {
+        Ok(mut d) => {
+            let slot = if expanded {
+                &mut d.zoom_exp
+            } else {
+                &mut d.zoom
+            };
+            if (*slot - z).abs() < f32::EPSILON {
+                return;
+            }
+            *slot = z;
+        }
+        Err(_) => return,
+    }
+    tr!("set_zoom {}={z}", if expanded { "放大态" } else { "贴角态" });
+    persist(&app, &shared);
 }
 
 /// 面板的位置或尺寸被用户改过了。放大态记进 exp_*，贴角态记尺寸并重新贴回角上。
@@ -838,8 +919,8 @@ fn spawn_hover_watch(app: AppHandle) {
             }
         }
         // 已经点进去在编辑了：只有当面板同时失去焦点才收，否则打字打到一半
-        // 鼠标偶然滑出去就消失是不可接受的。
-        if shared.interacted.load(Ordering::Relaxed) && panel.is_focused().unwrap_or(false) {
+        // 鼠标偶然滑出去就消失是不可接受的。焦点直接问系统，见 platform::is_foreground。
+        if shared.interacted.load(Ordering::Relaxed) && platform::is_foreground(&panel) {
             continue;
         }
 
@@ -855,14 +936,12 @@ fn spawn_hover_watch(app: AppHandle) {
             continue;
         }
 
-        if std::env::var_os("HOVERNOTE_TRACE").is_some() {
-            eprintln!(
-                "[hide] cursor=({cx},{cy}) panel={panel_rect:?} orb={orb_rect:?} \
-                 interacted={} focused={:?}",
-                shared.interacted.load(Ordering::Relaxed),
-                panel.is_focused(),
-            );
-        }
+        tr!(
+            "[hide] cursor=({cx},{cy}) panel={panel_rect:?} orb={orb_rect:?} \
+             interacted={} foreground={}",
+            shared.interacted.load(Ordering::Relaxed),
+            platform::is_foreground(&panel),
+        );
 
         let app2 = app.clone();
         let _ = app.run_on_main_thread(move || {
@@ -903,6 +982,9 @@ fn spawn_corner_watch(app: AppHandle) {
                 // 头一回见的那套配置刚在表里开了户。
                 persist(&app2, &shared);
             }
+            // 和贴角校正同理：没有可靠的通知点能知道有人插到了折角前面，
+            // 搭同一趟车每轮问一句。见 raise_if_buried。
+            raise_if_buried(&app2);
             if !snap_orb(&app2) && !switched {
                 return;
             }
@@ -1058,8 +1140,11 @@ pub fn run() {
             hide_panel,
             mark_interacted,
             open_url,
+            clipboard_read,
+            clipboard_write,
             toggle_expand,
             panel_geometry,
+            set_zoom,
             quit_app,
         ])
         .setup(|app| {

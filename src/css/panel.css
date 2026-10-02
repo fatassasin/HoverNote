@@ -557,7 +557,10 @@ body.expanded.orb-br .fab {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13.5px;
+  /* 字号乘一个倍率，Ctrl+滚轮／Ctrl+加减调它。基准值留在这儿不动，--zoom 由
+     panel.js 按当前是贴角态还是放大态换成对应的那一份，见那边的 applyZoom。
+     标题那几档用的是 em，跟着这个值一起缩放，不用各改一遍。 */
+  font-size: calc(13.5px * var(--zoom, 1));
   line-height: 1.72;
   /* 源码里的空格和换行必须原样留住——缩进是列表层级的唯一依据，
      而且光标偏移是按字符数算的，折叠空白会让它和源码对不上。 */
@@ -575,10 +578,19 @@ body.expanded.orb-br .fab {
   pointer-events: none;
 }
 
-/* 放大态下限宽居中，免得一行拉满一千多像素没法读 */
+/* 放大态两侧留白按比例走，窗口拉多宽正文就跟多宽。
+
+   原先是「正文限宽 760px、多出来的宽度全变成留白」，于是窗口拉过某个宽度之后
+   正文就钉死不动了，只有两边的空白越来越大——拉宽等于什么都没发生。改成百分比
+   之后，留白和正文一起按比例长，拉到哪儿跟到哪儿。
+
+   代价是屏幕很宽时一行会相当长，读起来要多费点眼力找下一行的行首；那是换来
+   「拉宽有用」必须付的账，真嫌长把窗口收窄一点就是了。
+
+   24px 是窄窗时的下限，免得比例算出来的留白小到字贴着边。 */
 body.expanded .doc {
-  font-size: 14.5px;
-  padding: 8px max(24px, calc((100% - 760px) / 2)) 56px;
+  font-size: calc(14.5px * var(--zoom, 1));
+  padding: 8px max(24px, 10%) 56px;
 }
 
 /* ------------------------------------------------- 正文里的 Markdown
@@ -721,6 +733,172 @@ body.expanded .doc {
   border-radius: 6px;
   background-clip: content-box;
   background-color: rgba(255, 255, 255, 0.16);
+}
+
+/* -------------------------------------------------------- 右键罗盘 */
+
+/* 以右键按下的那一点为圆心，上面复制、再往上剪切，下面粘贴，左右撤回 / 重做。
+   字摆在哪儿，按住右键往哪儿拖就是哪个——单击时它是菜单，拖动时它是地图。
+
+   没有底框：只在圆心周围铺一团面板底色，往外渐渐淡掉，把底下的正文压下去。
+   方框会让它看起来像系统菜单；这里要的是「从正文里浮出来的几个字」。
+
+   各个字离圆心的距离和 panel.js 里的 FLING / FAR / CP_* 是同一套数，改一边要改另一边。 */
+.compass {
+  position: fixed;
+  z-index: 65;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.12s var(--ease),
+    visibility 0s 0.12s;
+}
+
+.compass.on {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.12s var(--ease);
+}
+
+.compass::before {
+  content: "";
+  position: absolute;
+  left: -118px;
+  top: -118px;
+  width: 236px;
+  height: 236px;
+  background: radial-gradient(closest-side, rgba(38, 38, 38, 0.99) 76%, rgba(38, 38, 38, 0) 100%);
+}
+
+.cp-hub {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+/* 四条臂只画在字与字之间的空当里，不从字底下穿过去 */
+.cp-arm {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.14);
+}
+.cp-arm.up { left: -0.5px; width: 1px; top: -24px; height: 18px; }
+.cp-arm.far { left: -0.5px; width: 1px; top: -70px; height: 26px; }
+.cp-arm.down { left: -0.5px; width: 1px; top: 6px; height: 28px; }
+.cp-arm.left { top: -0.5px; height: 1px; left: -48px; width: 42px; }
+.cp-arm.right { top: -0.5px; height: 1px; left: 6px; width: 42px; }
+
+/* 复制和剪切的分界。往上拖过这道刻度，亮的字就从复制换成剪切。 */
+.cp-tick {
+  position: absolute;
+  left: -3.5px;
+  top: -57px;
+  width: 7px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.cp-w {
+  position: absolute;
+  padding: 4px 6px;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--dim);
+  pointer-events: auto;
+  transition: color 0.1s var(--ease);
+}
+.cp-w[data-a="copy"] { left: 0; top: -34px; }
+.cp-w[data-a="cut"] { left: 0; top: -80px; }
+.cp-w[data-a="paste"] { left: 0; top: 46px; }
+.cp-w[data-a="undo"] { left: -66px; top: 0; }
+.cp-w[data-a="redo"] { left: 66px; top: 0; }
+
+/* 撤回 / 重做放在两翼，比中轴上的三个轻一档：它们本来就有 Ctrl+Z / Y，
+   罗盘上是顺手捎带的。 */
+.cp-w[data-a="undo"],
+.cp-w[data-a="redo"] {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+/* 拖着的时候指针被编辑区捕获了，:hover 不作数，只认 .hot */
+.compass:not(.dragging) .cp-w:hover,
+.compass .cp-w.hot {
+  color: #fff;
+}
+
+/* 用不了的字留着位置、只是淡掉：方位得一直是那个方位，不能因为少了一个就挪。 */
+.compass .cp-w.off {
+  color: rgba(122, 122, 122, 0.3);
+  pointer-events: none;
+}
+
+/* 做完一件事，鼠标旁边一行小字说一声。
+
+   没有底框，只靠一圈面板底色的字影压住底下的正文——它是一句旁白，不是控件。 */
+.hint {
+  position: fixed;
+  z-index: 70;
+  left: 0;
+  top: 0;
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text);
+  text-shadow:
+    0 0 3px #262626,
+    0 0 8px #262626,
+    0 0 12px #262626;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 0);
+}
+
+.hint.go {
+  animation: hint-rise 1.1s var(--ease) forwards;
+}
+
+@keyframes hint-rise {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+  18% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+}
+
+/* 复制的那一下，选区亮一拍。 */
+#editor.flash ::selection {
+  background: rgba(120, 165, 255, 0.85);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hint.go {
+    animation-duration: 0.01s;
+  }
+  .compass,
+  .compass.on {
+    transition: none;
+  }
 }
 
 /* ---------------------------------------------------------- 新建按钮 */

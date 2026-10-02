@@ -53,6 +53,8 @@ mod ffi {
     pub const SWP_NOZORDER: u32 = 0x0004;
     pub const SWP_NOACTIVATE: u32 = 0x0010;
     pub const HWND_TOPMOST: isize = -1;
+    /// GetAncestor：从命中的子窗口（WebView2 那堆 Chrome_* 子窗）回到顶层窗口。
+    pub const GA_ROOT: u32 = 2;
 
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
@@ -107,7 +109,18 @@ mod ffi {
         pub fn CreateMutexW(attrs: *const c_void, owner: i32, name: *const u16) -> isize;
         pub fn GetLastError() -> u32;
         pub fn GetLocalTime(time: *mut SystemTime);
+        pub fn GlobalAlloc(flags: u32, bytes: usize) -> isize;
+        pub fn GlobalLock(mem: isize) -> *mut c_void;
+        pub fn GlobalUnlock(mem: isize) -> i32;
+        pub fn GlobalFree(mem: isize) -> isize;
+        pub fn GlobalSize(mem: isize) -> usize;
+        pub fn Sleep(ms: u32);
     }
+
+    /// 剪贴板里的 UTF-16 文本。
+    pub const CF_UNICODETEXT: u32 = 13;
+    /// SetClipboardData 要的是可移动内存；交出去之后归系统管，不能再释放。
+    pub const GMEM_MOVEABLE: u32 = 0x0002;
 
     pub const SW_SHOWNORMAL: i32 = 1;
 
@@ -139,6 +152,14 @@ mod ffi {
         pub fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfo) -> i32;
         pub fn GetWindowLongW(hwnd: isize, index: i32) -> i32;
         pub fn SetWindowLongW(hwnd: isize, index: i32, value: i32) -> i32;
+        pub fn WindowFromPoint(point: Point) -> isize;
+        pub fn GetAncestor(hwnd: isize, flags: u32) -> isize;
+        pub fn GetForegroundWindow() -> isize;
+        pub fn OpenClipboard(owner: isize) -> i32;
+        pub fn CloseClipboard() -> i32;
+        pub fn EmptyClipboard() -> i32;
+        pub fn GetClipboardData(format: u32) -> isize;
+        pub fn SetClipboardData(format: u32, mem: isize) -> isize;
         pub fn SetWindowPos(
             hwnd: isize,
             after: isize,
@@ -222,6 +243,63 @@ pub fn raise_to_top(window: &WebviewWindow) {
 
 #[cfg(not(windows))]
 pub fn raise_to_top(_window: &WebviewWindow) {}
+
+/// 窗口在 (x, y) 这个点上是不是被别人压住了。
+///
+/// 置顶不是一劳永逸的：`WS_EX_TOPMOST` 只保证**排进去的那一刻**在非置顶窗口前面，
+/// 此后系统不再持续纠正，置顶层内部也仍然是谁后抬谁在上。于是一个置顶窗口完全可能
+/// 滞留在别人后面——实测折角曾整块被同为 Tauri 的置顶全屏窗口 Localless 盖住，而
+/// 折角只在面板显示时抬过一次，此后再没人把它抬回来。一旦沉下去鼠标就够不到卷角，
+/// `peek_panel` 一次都不会被调用。窗口还在、位置也对，只是事件到不了。
+///
+/// 判断走 `WindowFromPoint` 而不是比 z-order：真正要问的就是「这一点上的鼠标事件
+/// 会发给谁」，而那正是这个 API 的答案。命中的多半是 WebView2 的子窗口，所以要
+/// `GetAncestor` 回到顶层再比。
+///
+/// **任务栏也算压住。** 折角贴在屏幕角上，任务栏自动隐藏时滑出来那条带子正好盖住
+/// 它；而实测常态是折角排在露出来的任务栏**前面**（探点仍归折角），所以抬到它前面
+/// 是恢复常态。反过来把任务栏列为例外，只会让折角在偶尔真被它盖住时彻底卡死。
+#[cfg(windows)]
+pub fn buried_at(window: &WebviewWindow, x: i32, y: i32) -> bool {
+    let Some(hwnd) = raw_hwnd(window) else {
+        return false;
+    };
+    unsafe {
+        let hit = ffi::WindowFromPoint(ffi::Point { x, y });
+        if hit == 0 {
+            return false;
+        }
+        let root = ffi::GetAncestor(hit, ffi::GA_ROOT);
+        root != 0 && root != hwnd
+    }
+}
+
+#[cfg(not(windows))]
+pub fn buried_at(_window: &WebviewWindow, _x: i32, _y: i32) -> bool {
+    false
+}
+
+/// 这个窗口此刻是不是系统的前台窗口。
+///
+/// 不用 tao 的 `is_focused()`：那是它自己记的一份，只在收到 WM_NCACTIVATE /
+/// WM_KILLFOCUS 时才翻。遇到会话切换——远程桌面连上又断开、锁屏再解锁——前台
+/// 被系统直接换走，这两条消息可能根本不来，它那份就一直停在「有焦点」。实测连过
+/// 手机远程之后，点了别处面板也不收，得放大再缩回一次（放大会 set_focus，把
+/// 那份状态重新同步一遍）才好。直接问系统就没有同步不同步的问题。
+///
+/// 前台窗口总是顶层窗口；焦点落在 WebView2 的子窗口里时也一样，所以不用 GetAncestor。
+#[cfg(windows)]
+pub fn is_foreground(window: &WebviewWindow) -> bool {
+    let Some(hwnd) = raw_hwnd(window) else {
+        return false;
+    };
+    unsafe { ffi::GetForegroundWindow() == hwnd }
+}
+
+#[cfg(not(windows))]
+pub fn is_foreground(window: &WebviewWindow) -> bool {
+    window.is_focused().unwrap_or(false)
+}
 
 /// 关掉 DWM 画的那圈窗口边线。圆角窗口在 Win11 上默认带 1px 描边，
 /// 套在折角图标外面就是一个很明显的方框。
@@ -481,4 +559,100 @@ pub fn open_external(url: &str) -> bool {
 #[cfg(not(windows))]
 pub fn open_external(url: &str) -> bool {
     allowed_scheme(url)
+}
+
+/// 打开剪贴板。别的程序（剪贴板历史、远程桌面、各种同步工具）正拿着它的时候会
+/// 失败，而它们通常几毫秒就放手——重试几次，比让右键粘贴偶尔「按了没反应」强。
+#[cfg(windows)]
+fn open_clipboard(owner: isize) -> bool {
+    for _ in 0..10 {
+        if unsafe { ffi::OpenClipboard(owner) } != 0 {
+            return true;
+        }
+        unsafe { ffi::Sleep(10) };
+    }
+    false
+}
+
+/// 读剪贴板里的文本。没有文本（比如复制的是一张图）或打不开时返回 None。
+///
+/// 不让网页自己用 `navigator.clipboard.readText()`：WebView2 读剪贴板要过权限，
+/// 而放行它的开关 Tauri 只在代码里建窗口时给，面板是从配置文件建的，够不着。
+#[cfg(windows)]
+pub fn clipboard_read(window: &WebviewWindow) -> Option<String> {
+    let hwnd = raw_hwnd(window).unwrap_or(0);
+    if !open_clipboard(hwnd) {
+        return None;
+    }
+    let text = unsafe {
+        let mem = ffi::GetClipboardData(ffi::CF_UNICODETEXT);
+        let ptr = if mem == 0 { std::ptr::null_mut() } else { ffi::GlobalLock(mem) };
+        if ptr.is_null() {
+            None
+        } else {
+            // 按块大小封顶，不全信结尾那个 NUL——别的程序塞进来的数据不一定守规矩。
+            let cap = ffi::GlobalSize(mem) / 2;
+            let wide = std::slice::from_raw_parts(ptr as *const u16, cap);
+            let len = wide.iter().position(|&c| c == 0).unwrap_or(cap);
+            let s = String::from_utf16_lossy(&wide[..len]);
+            ffi::GlobalUnlock(mem);
+            Some(s)
+        }
+    };
+    unsafe { ffi::CloseClipboard() };
+    text
+}
+
+#[cfg(not(windows))]
+pub fn clipboard_read(_window: &WebviewWindow) -> Option<String> {
+    None
+}
+
+/// 把文本写进剪贴板。
+///
+/// owner 必须给真窗口：用 NULL 打开的话，EmptyClipboard 会把所有者置空，
+/// 文档写明这之后 SetClipboardData 会失败。
+#[cfg(windows)]
+pub fn clipboard_write(window: &WebviewWindow, text: &str) -> bool {
+    let Some(hwnd) = raw_hwnd(window) else {
+        return false;
+    };
+    // 剪贴板上的文本约定是 CRLF；只给 LF 的话，贴进记事本这类老程序会连成一行。
+    let wide: Vec<u16> = text
+        .replace("\r\n", "\n")
+        .replace('\n', "\r\n")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    if !open_clipboard(hwnd) {
+        return false;
+    }
+    let ok = unsafe {
+        ffi::EmptyClipboard();
+        let mem = ffi::GlobalAlloc(ffi::GMEM_MOVEABLE, wide.len() * 2);
+        let ptr = if mem == 0 { std::ptr::null_mut() } else { ffi::GlobalLock(mem) };
+        if ptr.is_null() {
+            if mem != 0 {
+                ffi::GlobalFree(mem);
+            }
+            false
+        } else {
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr as *mut u16, wide.len());
+            ffi::GlobalUnlock(mem);
+            // 成功之后这块内存归系统，不能再 free；失败了还是我们的。
+            if ffi::SetClipboardData(ffi::CF_UNICODETEXT, mem) == 0 {
+                ffi::GlobalFree(mem);
+                false
+            } else {
+                true
+            }
+        }
+    };
+    unsafe { ffi::CloseClipboard() };
+    ok
+}
+
+#[cfg(not(windows))]
+pub fn clipboard_write(_window: &WebviewWindow, _text: &str) -> bool {
+    false
 }

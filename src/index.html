@@ -96,6 +96,26 @@
         ></div>
       </main>
 
+      <!-- 正文的右键罗盘。圆心落在右键按下的那一点，贴着窗口边的时候往里收，
+           不会被切掉一半。单击时点字，按住右键时往字的方向拖，见 panel.js。 -->
+      <div class="compass" id="compass" aria-hidden="true">
+        <i class="cp-arm up"></i>
+        <i class="cp-arm far"></i>
+        <i class="cp-arm down"></i>
+        <i class="cp-arm left"></i>
+        <i class="cp-arm right"></i>
+        <i class="cp-tick"></i>
+        <i class="cp-hub"></i>
+        <div class="cp-w" data-a="cut">剪切</div>
+        <div class="cp-w" data-a="copy">复制</div>
+        <div class="cp-w" data-a="paste">粘贴</div>
+        <div class="cp-w" data-a="undo">撤回</div>
+        <div class="cp-w" data-a="redo">重做</div>
+      </div>
+
+      <!-- 做完一件事，鼠标旁边飘一行小字 -->
+      <div class="hint" id="hint" aria-live="polite"></div>
+
       <button class="fab" id="add" aria-label="新建笔记">
         <svg class="ico" viewBox="0 0 18 18" width="16" height="16" aria-hidden="true">
           <path d="M9 4.4v9.2" />

@@ -20,6 +20,8 @@ const els = {
   findq: document.getElementById('findq'),
   findprev: document.getElementById('findprev'),
   findnext: document.getElementById('findnext'),
+  hint: document.getElementById('hint'),
+  compass: document.getElementById('compass'),
 };
 
 // notes 是平铺的，数组顺序就是显示顺序。分组不另存成员名单：归属只写在
@@ -376,6 +378,19 @@ els.list.addEventListener('click', (e) => {
 els.list.addEventListener('dblclick', (e) => {
   const name = e.target.closest('.name');
   if (name) beginEdit(name);
+});
+
+// F2 改名，和资源管理器一个手感。改的是「刚点过的那一行」：点在名字上焦点就
+// 落在那个输入框里（组也一样）；点在行的别处焦点没过来，那就改当前这篇。
+// 只在笔记栏开着时认——收着的时候看不见改的是谁。
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'F2' || e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
+  if (!document.body.classList.contains('drawer-open') || isEditing()) return;
+  const focused = document.activeElement?.closest?.('.name');
+  const name = focused && els.list.contains(focused) ? focused : els.list.querySelector('.note.active .name');
+  if (!name) return;
+  e.preventDefault();
+  beginEdit(name);
 });
 
 els.list.addEventListener(
@@ -820,11 +835,36 @@ if (!els.editor.isContentEditable) {
 
 let composing = false;
 
-/** 从 DOM 读回源码。每个顶层子节点算一行。 */
+/** 一个顶层子节点在源码里占多少个字符，含它后面那个换行。见 docText。 */
+function lineLen(node) {
+  return node.nodeType === Node.TEXT_NODE ? node.data.length : node.textContent.length + 1;
+}
+
+/** 从 DOM 读回源码。每个顶层**元素**算一行；裸文本节点按原样接上去。
+ *
+ * 原先是「每个顶层子节点算一行，join('\n')」，裸文本节点会被多算一个换行：
+ * 退格把两行并起来时，浏览器有时不是真的合并两个 div，而是在顶层留一个只有
+ * "\n" 的文本节点（编辑区是 white-space: pre-wrap，换行符在这儿是当真的）。
+ * 那一个 \n 自己算一行，前后 join 再各补一个，一个换行就变成了三个——屏幕上
+ * 一下空出两行。「有时候」正是因为它取决于光标落在哪一层，不是每次退格都这样。
+ *
+ * 裸文本节点不是一行，是上一行漏在外面的内容，它自带的换行就是换行本身，
+ * 不能再替它补分隔符。withinLine / locate 那边早就知道它会出现（「全删空之后
+ * 浏览器会在顶层留一个裸文本节点」），只有这里一直把它当成了一行。
+ */
 function docText() {
-  const out = [];
-  for (const node of els.editor.childNodes) out.push(node.textContent);
-  return out.join('\n');
+  let out = '';
+  let sep = false; // 末尾那个 \n 是我们补的分隔符，不是空行，返回前要去掉
+  for (const node of els.editor.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      out += node.data;
+      sep = false;
+    } else {
+      out += node.textContent + '\n';
+      sep = true;
+    }
+  }
+  return sep ? out.slice(0, -1) : out;
 }
 
 /** 光标在整篇源码里的字符偏移；行与行之间算一个换行符。 */
@@ -845,7 +885,7 @@ function offsetOf(node, off) {
   if (node === root) {
     let n = 0;
     for (let i = 0; i < off && i < root.childNodes.length; i++) {
-      n += root.childNodes[i].textContent.length + 1;
+      n += lineLen(root.childNodes[i]);
     }
     return n;
   }
@@ -857,7 +897,7 @@ function offsetOf(node, off) {
   let base = 0;
   for (const sib of root.childNodes) {
     if (sib === ln) break;
-    base += sib.textContent.length + 1;
+    base += lineLen(sib);
   }
   return base + withinLine(ln, node, off);
 }
@@ -902,7 +942,7 @@ function locate(target) {
       // 空行：这一行只有一个 <br>，光标落在它前面
       return { node: ln, off: 0 };
     }
-    n += len + 1;
+    n += lineLen(ln);
   }
   const last = root.lastChild;
   if (!last) return { node: root, off: 0 };
@@ -926,6 +966,37 @@ function placeCaret(start, end) {
   sel.addRange(r);
 }
 
+/** 光标跑出可视范围就把它挪回来，只挪够用的那一点。
+ *
+ * 敲回车、或者一行写满自动折行时，光标会掉到可视区底下去。上面那句把滚动位置
+ * 原样放回去，视图不动，于是光标就看不见了——得在这儿补一下。
+ *
+ * 用 `scrollIntoView` 不行：它认的是整个元素，一行很长时会把行首拉到视野中央，
+ * 而人正在行尾打字。这里按光标自己的矩形算，缺多少补多少。
+ */
+function caretIntoView() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const r = sel.getRangeAt(0);
+  if (!els.editor.contains(r.startContainer)) return;
+
+  let rect = r.getBoundingClientRect();
+  // 空行上 collapsed 的 range 量出来可能是全 0，退回那一行的矩形。
+  if (!rect.height) {
+    let ln = r.startContainer;
+    while (ln && ln.parentNode !== els.editor) ln = ln.parentNode;
+    rect = ln?.getBoundingClientRect?.();
+  }
+  if (!rect || !rect.height) return;
+
+  const box = els.editor.getBoundingClientRect();
+  // 底下那一截是留给新建按钮的（CSS 里的 padding-bottom 也是这个数），
+  // 不留的话光标会正好钻到按钮底下，字被圆按钮压住。
+  const low = box.bottom - 46;
+  if (rect.top < box.top) els.editor.scrollTop -= box.top - rect.top;
+  else if (rect.bottom > low) els.editor.scrollTop += rect.bottom - low;
+}
+
 /** 把源码画到编辑区；给了 caret 就把光标放回那个字符偏移。 */
 function paint(text, caret) {
   // 命中在每次重画前重算，不留缓存。文本可能刚被改过、也可能刚换了一篇笔记，
@@ -933,11 +1004,19 @@ function paint(text, caret) {
   findHits = findOn ? scan(text, findQuery) : [];
   if (findAt >= findHits.length) findAt = 0;
 
+  // innerHTML 一换，元素里的内容整个没了，scrollTop 会被系统夹回 0——而每敲一个
+  // 字都要重画一次，于是每敲一个字视图就弹回文首。贴角的小窗里尤其明显：那点高度
+  // 几行字就滚起来了；放大态窗口高，多数笔记压根没滚过，所以那边看不出来。
+  // 先记下来，画完放回去。
+  const top = els.editor.scrollTop;
+
   els.editor.innerHTML = MD.paint(text);
   els.editor.classList.toggle('blank', !text);
   highlight();
+  els.editor.scrollTop = top;
   if (caret) placeCaret(caret.start, caret.end);
   activeLine();
+  if (caret) caretIntoView();
   if (findOn) findStatus();
 }
 
@@ -1158,7 +1237,9 @@ function findClose(keep) {
   els.find.classList.remove('miss');
 
   // 先 focus 再画：innerHTML 换过之后焦点还在编辑区上，这时候设的选区才落得住。
-  els.editor.focus();
+  // preventScroll：视图该滚到哪儿由下面那一句重画里的 caretIntoView 决定，不让
+  // focus 自己先跳一下。
+  els.editor.focus({ preventScroll: true });
   paint(docText(), sel);
 }
 
@@ -1192,22 +1273,32 @@ function restore(snap) {
     note.updated = Date.now();
     save();
   }
-  paint(snap.text, snap.caret);
-  els.editor.focus();
+  // 快照不一定记了光标——撤销栈最底下那一份（`loadDoc` 铺的底）就没有。没有就沿用
+  // 当前这个位置，必须赶在重画之前读，innerHTML 一换选区就没了。
+  const caret = snap.caret || caretRange();
+  // 先 focus 再画，和 findClose 那边同一个道理：innerHTML 换过之后焦点还在编辑区上，
+  // 这时候设的选区才落得住。顺序反过来就是「回退会上移」的原因——focus() 默认会把
+  // 光标滚进视野，而这时候选区刚被 innerHTML 抹掉，它就把光标当成在文首，视图跟着
+  // 弹到顶上。preventScroll 再兜一道：该滚多少由 paint 里的 caretIntoView 说了算。
+  els.editor.focus({ preventScroll: true });
+  paint(snap.text, caret);
   undoAt = 0; // 撤销之后下一次输入必定另起一个还原点，别合并进来
 }
 
+/** 撤一步。返回有没有真的撤到东西——右键手势要据此说「已撤回」还是「没有可撤回的」。 */
 function undo() {
-  if (undoStack.length < 2) return;
+  if (undoStack.length < 2) return false;
   redoStack.push(undoStack.pop());
   restore(undoStack[undoStack.length - 1]);
+  return true;
 }
 
 function redo() {
   const snap = redoStack.pop();
-  if (!snap) return;
+  if (!snap) return false;
   undoStack.push(snap);
   restore(snap);
+  return true;
 }
 
 /** 换笔记：重画并清空撤销栈——两篇笔记的撤销历史不该串在一起。 */
@@ -1217,6 +1308,9 @@ function loadDoc(text) {
   findFrom = 0;
   findAt = 0;
   paint(src);
+  // 换篇要从头看起。paint 现在会把滚动位置原样留住（见那边的注释），不在这儿
+  // 明写一句，上一篇滚到哪儿新的一篇就从哪儿开始。
+  els.editor.scrollTop = 0;
   undoStack = [{ text: src, caret: null }];
   redoStack = [];
   undoAt = 0;
@@ -1265,14 +1359,44 @@ els.editor.addEventListener('compositionend', () => {
   paint(text, caret);
 });
 
+/** 把一段外来文字插到选区上（有选中就替换掉）。Ctrl+V 和右键粘贴共用。 */
+function insertText(data, caret) {
+  const text = docText();
+  const at = caret || caretRange() || { start: text.length, end: text.length };
+  const clean = data.replace(/\r\n?/g, '\n');
+  replaceAll(text.slice(0, at.start) + clean + text.slice(at.end), at.start + clean.length);
+}
+
 els.editor.addEventListener('paste', (e) => {
   const data = e.clipboardData?.getData('text/plain');
   if (data == null) return;
   e.preventDefault();
+  insertText(data);
+});
+
+/* 回车自己做，不交给浏览器。
+ *
+ * 编辑区是 white-space: pre-wrap，换行符在这儿是当真的字符。Chromium 在这种
+ * 编辑区里按回车不走「拆成两个块」那条路，而是往文本里塞换行符——并且在一段
+ * 文字的末尾按时会一口气塞**两个**（塞一个的话它认为光标没地方站）。于是在
+ * 句号后面敲一下回车，源码里凭空多出一个换行，屏幕上空两行而不是一行。
+ *
+ * 想在事后把多出来的那个认出来是做不到的：它和人自己敲出来的空行长得一模一样。
+ * 所以干脆不让它发生——反正这个编辑器本来就是「改源码字符串 → 整篇重画」，
+ * 回车无非是在光标处插一个 \n，自己算比让浏览器改 DOM 再读回来可靠得多。
+ *
+ * 输入法组合期间必须放过去：那一下回车是用来敲定候选词的，不是换行。
+ */
+els.editor.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || composing || e.isComposing) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const sel = caretRange();
+  if (!sel) return;
+  e.preventDefault();
   const text = docText();
-  const caret = caretRange() || { start: text.length, end: text.length };
-  const clean = data.replace(/\r\n?/g, '\n');
-  replaceAll(text.slice(0, caret.start) + clean + text.slice(caret.end), caret.start + clean.length);
+  const a = Math.min(sel.start, sel.end);
+  const b = Math.max(sel.start, sel.end);
+  replaceAll(text.slice(0, a) + '\n' + text.slice(b), a + 1);
 });
 
 els.editor.addEventListener('keydown', (e) => {
@@ -1357,6 +1481,91 @@ for (const handle of document.querySelectorAll('.rz')) {
   });
 }
 
+// ------------------------------------------------------------- 正文字号
+
+// Ctrl+滚轮、Ctrl+加减调正文字号，Ctrl+0 回到原样。
+//
+// 贴角态和放大态**各记一份倍率**，互不影响：两态的基准字号本来就不同
+// （13.5px / 14.5px，见 panel.css），共用一个倍率的话，在贴角的小窗里调顺眼了
+// 切到放大态就偏大，反过来也一样。切换状态时换上另一份，各调各的。
+//
+// 上下限和 state.rs 里的 ZOOM_MIN/ZOOM_MAX 是同一对值：这边管手感，那边管
+// 进来的数据——IPC 不能假设发过去的一定是这里算好的那个数。
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 2.5;
+// 每一档 10%。等比而不是等差：字号越大，要看得出差别所需的增量也越大，
+// 固定加一个像素在小字号上跨度太粗、到大字号上又几乎没感觉。
+const ZOOM_STEP = 1.1;
+
+const zoom = { panel: 1, exp: 1 };
+
+function saneZoom(z) {
+  const v = Number(z);
+  // 老存档没有这两个字段，读出来是 undefined；手工编辑过的可能是 0 或负数，
+  // 那会让正文直接消失。都退回 1。
+  return Number.isFinite(v) && v > 0 ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v)) : 1;
+}
+
+/** 当前该用哪一份。 */
+function zoomKey() {
+  return expanded ? 'exp' : 'panel';
+}
+
+function applyZoom() {
+  document.documentElement.style.setProperty('--zoom', String(zoom[zoomKey()]));
+}
+
+// 两态各有各的定时器。共用一个的话，在小窗调完立刻切到放大态再调，前一次
+// 还没落盘的改动会被 clearTimeout 抹掉——调过的字号下次打开就没了。
+const zoomTimers = { panel: 0, exp: 0 };
+
+function setZoom(key, next) {
+  // 定到两位小数：这个数要存进 JSON，也要一路乘回来。0.9090909… 这种尾巴存进去
+  // 难看，来回几次还会飘。两位小数下 1 ÷ 1.1 × 1.1 正好回到 1。
+  const v = saneZoom(Math.round(next * 100) / 100);
+  if (zoom[key] === v) return;
+  zoom[key] = v;
+  applyZoom();
+  // 攒一下再存。滚轮推一把就是十几个事件，每一下都落盘等于拿存档当日志写。
+  clearTimeout(zoomTimers[key]);
+  zoomTimers[key] = setTimeout(() => {
+    invoke('set_zoom', { expanded: key === 'exp', zoom: zoom[key] });
+  }, 400);
+}
+
+function bumpZoom(dir) {
+  const key = zoomKey();
+  setZoom(key, dir > 0 ? zoom[key] * ZOOM_STEP : zoom[key] / ZOOM_STEP);
+}
+
+// passive: false 才拦得住默认行为。不拦的话 WebView2 会按它自己那套把**整页**
+// 缩放——顶栏、笔记栏、折角让位的那些边距会跟着一起变，和这里只调正文字号是
+// 两回事，叠在一起界面就乱了。
+window.addEventListener(
+  'wheel',
+  (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    if (!e.deltaY) return;
+    // 向上推是放大，和各家一致。
+    bumpZoom(e.deltaY < 0 ? 1 : -1);
+  },
+  { passive: false },
+);
+
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  // 主键盘那一排按 key 认（`=` 不按 Shift 就是加号那个键），小键盘按 code 认——
+  // 小键盘的 key 会随 NumLock 变成方向键，认 key 会漏。
+  const plus = e.key === '+' || e.key === '=' || e.code === 'NumpadAdd';
+  const minus = e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract';
+  const reset = e.key === '0' || e.code === 'Numpad0';
+  if (!plus && !minus && !reset) return;
+  e.preventDefault();
+  if (reset) setZoom(zoomKey(), 1);
+  else bumpZoom(plus ? 1 : -1);
+});
+
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !isEditing()) {
     e.preventDefault();
@@ -1369,8 +1578,263 @@ window.addEventListener('keydown', (e) => {
   else invoke('hide_panel');
 });
 
+// ---------------------------------------------------------- 右键
+
+/* 右键是一枚罗盘，圆心就是右键按下的那一点：
+ *
+ *              剪切
+ *              复制
+ *     撤回 ──── · ──── 重做
+ *              粘贴
+ *
+ * 同一张图两种用法：
+ *   单击右键 → 罗盘停在那儿，点哪个字做哪件事；点别处、按任意键、滚动都会收起。
+ *   按住右键往某个字的方向拖 → 那个字亮起来，松手就做。往上拖一小段是复制，
+ *     越过那道刻度再往上是剪切。拖出去又拖回圆心再松手，算作罢。
+ *
+ * 用不了的字淡掉但不挪位置：没选中时的剪切和复制，剪贴板里没字时的粘贴，
+ * 撤回 / 重做到了头也一样。方位得一直是那个方位，手才记得住。
+ *
+ * 选中了没有，要等右键按下的默认动作做完才算数：点在选区外的话 Chromium 会先
+ * 把光标挪到点的地方——粘贴也就正好贴在那儿，不用自己算。所以按下时先把罗盘
+ * 摆出来，下一拍再去读选区。
+ *
+ * Windows 上 contextmenu 在右键松开之后才来。松手时这一下已经办完了，
+ * 那个 contextmenu 只负责把系统菜单拦掉。
+ */
+
+const FLING = 28; // 拖够这么远才算指向了一个字，短了容易和手抖的单击混在一起
+const FAR = 57; // 往上超过这么远就从复制换成剪切——正好是两个字中间那道刻度
+const WOBBLE = 8; // 挪动不到这么多仍算单击
+
+// 罗盘的字最远伸到圆心上方 92、下方 56、两侧 80 左右，再各留一点边。
+// 圆心离窗口边不能比这更近，否则会被切掉一截。和 panel.css 里摆字的位置是同一套数。
+const CP_UP = 96;
+const CP_DOWN = 60;
+const CP_SIDE = 86;
+
+// 按住右键的这一下：{ id, x, y, moved, dir }。
+// moved：挪出过单击的范围；dir：此刻指着哪个字，null 是哪个都没指着。
+let rdrag = null;
+// 开着的罗盘：{ range }。range 是打开时读到的选区——点罗盘上的字不会动选区，
+// 但留一份更稳：动作都照着打开那一刻的样子做。
+let cp = null;
+// 这一下右键是鼠标按出来的。随后那个 contextmenu 见到它就只拦系统菜单，
+// 见不到说明是键盘上的菜单键 / Shift+F10，得自己把罗盘开出来。
+let rightPress = false;
+
+const cpItems = [...els.compass.querySelectorAll('.cp-w')];
+
+function cpItem(a) {
+  return cpItems.find((it) => it.dataset.a === a);
+}
+
+function aimOf(dx, dy) {
+  const ax = Math.abs(dx);
+  const ay = Math.abs(dy);
+  if (ax >= FLING && ax > ay * 1.2) return dx < 0 ? 'undo' : 'redo';
+  if (ay >= FLING && ay > ax * 1.2) return dy > 0 ? 'paste' : -dy >= FAR ? 'cut' : 'copy';
+  return null;
+}
+
+function cpHot(a) {
+  for (const it of cpItems) it.classList.toggle('hot', it.dataset.a === a);
+}
+
+function cpOff(a, off) {
+  cpItem(a).classList.toggle('off', off);
+}
+
+function clamp(v, lo, hi) {
+  return lo > hi ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v));
+}
+
+/** 做完了说一声：鼠标旁边一行小字，飘起来淡掉。 */
+function hintSay(text, x, y) {
+  const h = els.hint;
+  h.textContent = text;
+  h.classList.remove('go');
+  h.style.left = `${x}px`;
+  h.style.top = `${Math.max(4, y - 24)}px`;
+  void h.offsetWidth; // 连着两次同一句也要重新播一遍
+  h.classList.add('go');
+}
+
+function hintOff() {
+  els.hint.classList.remove('go');
+}
+
+function cpOpen(x, y) {
+  const c = els.compass;
+  c.style.left = `${clamp(x, CP_SIDE, innerWidth - CP_SIDE)}px`;
+  c.style.top = `${clamp(y, CP_UP, innerHeight - CP_DOWN)}px`;
+  cp = { range: null };
+  cpHot(null);
+  hintOff();
+  c.classList.add('on');
+}
+
+/** 选区定下来之后，把用不了的字淡掉。 */
+function cpSettle() {
+  const mine = cp;
+  if (!mine) return;
+  const s = caretRange();
+  mine.range = s;
+  const sel = !!s && s.start !== s.end;
+  cpOff('cut', !sel);
+  cpOff('copy', !sel);
+  cpOff('undo', undoStack.length < 2);
+  cpOff('redo', !redoStack.length);
+  cpOff('paste', false);
+  invoke('clipboard_read').then((t) => {
+    if (cp === mine) cpOff('paste', !t);
+  });
+}
+
+function cpClose() {
+  cp = null;
+  els.compass.classList.remove('on', 'dragging');
+}
+
+function rdragDrop() {
+  rdrag = null;
+  rightPress = false;
+  cpClose();
+  hintOff();
+}
+
+/** 做罗盘上的一件事。x、y 是那句「已复制」之类的小字该出现的地方。 */
+async function cpDo(a, x, y) {
+  const s = cp?.range;
+  cpClose();
+  if (a === 'undo') {
+    if (undo()) hintSay('已撤回', x, y);
+  } else if (a === 'redo') {
+    if (redo()) hintSay('已重做', x, y);
+  } else if (a === 'paste') {
+    pasteAt(s);
+  } else if (s && s.start !== s.end) {
+    // 复制 / 剪切的都是源码那一段，不是屏幕上渲染出来的样子：## 和 ** 都跟着走，
+    // 贴回来还是原样。
+    const text = docText();
+    const ok = await invoke('clipboard_write', { text: text.slice(s.start, s.end) });
+    if (!ok) return;
+    if (a === 'copy') {
+      els.editor.classList.add('flash');
+      setTimeout(() => els.editor.classList.remove('flash'), 160);
+      hintSay('已复制', x, y);
+    } else if (docText() === text) {
+      // 等剪贴板那一下的工夫里正文要是变了，手里这对偏移就不作数了，宁可不删
+      els.editor.focus({ preventScroll: true });
+      replaceAll(text.slice(0, s.start) + text.slice(s.end), s.start);
+      hintSay('已剪切', x, y);
+    }
+  }
+}
+
+/** 把剪贴板里的文字贴到 s（有选中就换掉）。剪贴板里没字就什么也不做。 */
+async function pasteAt(s) {
+  const data = await invoke('clipboard_read');
+  if (!data) return;
+  els.editor.focus({ preventScroll: true });
+  insertText(data, s);
+}
+
+els.editor.addEventListener('pointerdown', (e) => {
+  if (e.button !== 2) return;
+  rightPress = true;
+  rdrag = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, dir: null };
+  // 拖出窗口再松手也得收得到 pointerup
+  els.editor.setPointerCapture(e.pointerId);
+  cpOpen(e.clientX, e.clientY);
+  els.compass.classList.add('dragging');
+  setTimeout(cpSettle);
+});
+
+els.editor.addEventListener('pointermove', (e) => {
+  const d = rdrag;
+  if (!d || e.pointerId !== d.id) return;
+  const dx = e.clientX - d.x;
+  const dy = e.clientY - d.y;
+  if (Math.hypot(dx, dy) > WOBBLE) d.moved = true;
+  const a = aimOf(dx, dy);
+  d.dir = a && !cpItem(a).classList.contains('off') ? a : null;
+  cpHot(d.dir);
+});
+
+els.editor.addEventListener('pointerup', (e) => {
+  const d = rdrag;
+  if (!d || e.button !== 2 || e.pointerId !== d.id) return;
+  rdrag = null;
+  els.compass.classList.remove('dragging');
+  if (d.dir) cpDo(d.dir, e.clientX, e.clientY);
+  else if (d.moved) cpClose();
+  // 没挪过：这是单击，罗盘留着等人点
+});
+
+els.editor.addEventListener('pointercancel', rdragDrop);
+window.addEventListener('blur', rdragDrop);
+
+// 点罗盘上的字不能让编辑区丢焦点——选区一丢，复制和剪切就没东西可做了
+els.compass.addEventListener('mousedown', (e) => e.preventDefault());
+
+els.compass.addEventListener('click', (e) => {
+  const it = e.target.closest('.cp-w');
+  if (!it || it.classList.contains('off') || !cp) return;
+  const r = it.getBoundingClientRect();
+  cpDo(it.dataset.a, r.left + r.width / 2, r.top + 4);
+});
+
+// 罗盘开着的时候，点别处就收起。右键点别处也一样——紧接着编辑区那边会在新的
+// 位置重新开一枚。
+window.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (cp && !rdrag && !els.compass.contains(e.target)) cpClose();
+  },
+  true,
+);
+
+// 按任何键都收起：开始打字了，罗盘就不该还挂在那儿。Esc 只收罗盘，
+// 不能再往下传——下面那个 Esc 处理会把整个面板藏起来。
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (!cp || rdrag) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    cpClose();
+  },
+  true,
+);
+
+// 正文滚走了，圆心就不在原来那个字上了
+els.editor.addEventListener('scroll', () => {
+  if (cp && !rdrag) cpClose();
+});
+window.addEventListener('resize', () => {
+  if (cp && !rdrag) cpClose();
+});
+
 window.addEventListener('contextmenu', (e) => {
-  if (!e.target.closest('textarea, input')) e.preventDefault();
+  // 输入框（笔记名、查找）照旧用系统菜单，那边本来就好用。
+  if (e.target.closest('textarea, input')) return;
+  e.preventDefault();
+  if (rightPress) {
+    rightPress = false;
+    return;
+  }
+  if (!els.editor.contains(e.target)) return;
+  // 键盘上的菜单键 / Shift+F10：没有鼠标位置，圆心放在光标（或选区）底下
+  const sel = window.getSelection();
+  const r = sel?.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null;
+  const box = els.editor.getBoundingClientRect();
+  const x = r && (r.width || r.height) ? r.left + r.width / 2 : box.left + box.width / 2;
+  const y = r && (r.width || r.height) ? r.bottom : box.top + box.height / 2;
+  cpOpen(x, y);
+  cpSettle();
 });
 
 // 告诉后端「用户真的动了这个面板」，此后不再是鼠标划过就收的预览态。
@@ -1405,6 +1869,7 @@ listen('hn:corner', (e) => applyCorner(e.payload));
 
 listen('hn:shown', () => {
   marked = false;
+  rdragDrop();
   closeDrawer();
   // 面板重新露出来时不该还挂着上一次的搜索——那是上一轮的上下文，
   // 而且一片橙色高亮会盖过「这是刚打开的一篇笔记」这个第一眼。
@@ -1414,7 +1879,10 @@ listen('hn:shown', () => {
 listen('hn:expanded', (e) => {
   expanded = !!e.payload;
   document.body.classList.toggle('expanded', expanded);
-  if (expanded) els.editor.focus();
+  // 换上这一态自己的那份字号倍率。
+  applyZoom();
+  // preventScroll：正读到笔记中间按放大，不该顺手把视图甩回文首。
+  if (expanded) els.editor.focus({ preventScroll: true });
 });
 
 // --------------------------------------------------------------- 启动
@@ -1423,6 +1891,9 @@ listen('hn:expanded', (e) => {
   applyCorner(await invoke('current_corner'));
 
   const data = await invoke('load_state');
+  zoom.panel = saneZoom(data.zoom);
+  zoom.exp = saneZoom(data.zoom_exp);
+  applyZoom();
   notes = Array.isArray(data.notes) ? data.notes : [];
   groups = Array.isArray(data.groups) ? data.groups : [];
   // 兼容早期没有 title 字段的数据，以及手工编辑坏掉的存档。

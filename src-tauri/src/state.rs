@@ -75,6 +75,22 @@ pub struct Layout {
 /// 同时给这份表一个上界——插过的每一块屏都留一条，总不能无限长下去。
 pub const LAYOUT_MAX: usize = 16;
 
+/// 正文字号缩放的上下限。再小就认不出字形，再大在贴角的小窗里一行放不下几个字。
+/// 前端 `panel.js` 里有同样的一对值——那边管手感，这边管进来的数据。IPC 是外部
+/// 输入，不能假设发过来的一定是前端算好的那个数。
+pub const ZOOM_MIN: f32 = 0.6;
+pub const ZOOM_MAX: f32 = 2.5;
+
+/// 把倍率夹回可用区间。NaN 也要拦：它比不出大小，`clamp` 会 panic，而写进
+/// `font-size: calc()` 会让整块正文直接不显示。
+pub fn sane_zoom(z: f32) -> f32 {
+    if z.is_finite() {
+        z.clamp(ZOOM_MIN, ZOOM_MAX)
+    } else {
+        1.0
+    }
+}
+
 /// 存档格式版本。尺寸字段从物理像素改成逻辑像素。
 ///
 /// 最初迁移曾使用版本 1，但 `#[serde(default)]` 会把旧文件里缺失的 version 直接补成
@@ -101,6 +117,17 @@ pub struct Persisted {
     pub exp_h: u32,
     pub exp_x: i32,
     pub exp_y: i32,
+    /// 正文字号的缩放倍率，贴角态和放大态**各记一份**。
+    ///
+    /// 两态的基准字号本来就不同（13.5px / 14.5px），共用一个倍率的话，在小窗里调
+    /// 顺眼了切到放大态就偏大，反过来也一样——那正是「互相干扰」。分开记，各调各的。
+    ///
+    /// 不进 `Layout`：它是「这段文字多大看着舒服」的偏好，跟着眼睛走，不跟着屏幕走。
+    /// 字号用的是逻辑像素，在任何显示缩放下都指同样大小，换屏不需要另记一份。
+    ///
+    /// 加这两个字段没有升 VERSION，理由同下面的 `groups`。
+    pub zoom: f32,
+    pub zoom_exp: f32,
     /// 每套显示配置各记一份几何，最近用过的排在最前，超出 `LAYOUT_MAX` 就丢掉队尾。
     ///
     /// 上面那几个 `panel_*` / `exp_*` 是**当前这套配置**的值，切换配置时由
@@ -135,6 +162,8 @@ impl Default for Persisted {
             exp_h: 0,
             exp_x: 0,
             exp_y: 0,
+            zoom: 1.0,
+            zoom_exp: 1.0,
             layouts: Vec::new(),
             active: None,
             notes: Vec::new(),
@@ -386,6 +415,10 @@ pub fn load(app: &AppHandle) -> Loaded {
         data.layouts.clear();
         data.version = VERSION;
     }
+    // 倍率不参与上面那段重置——它不是像素值，换算不回来的问题跟它无关。但存档
+    // 可能被手工编辑过，0 或负数会让正文直接消失，所以读进来先夹一道。
+    data.zoom = sane_zoom(data.zoom);
+    data.zoom_exp = sane_zoom(data.zoom_exp);
     Loaded::Ok(data)
 }
 
@@ -558,6 +591,41 @@ mod tests {
         let d: Persisted = serde_json::from_str(raw).expect("老存档应该照样读得动");
         assert!(d.layouts.is_empty());
         assert_eq!((d.panel_w, d.panel_h), (420, 600));
+    }
+
+    /// 倍率从 IPC 进来，不能假设是前端算好的那个数。越界夹回去，
+    /// NaN 单独拦——`clamp` 碰上它会 panic。
+    #[test]
+    fn 字号倍率夹回可用区间() {
+        assert_eq!(sane_zoom(1.2), 1.2);
+        assert_eq!(sane_zoom(99.0), ZOOM_MAX);
+        assert_eq!(sane_zoom(0.0), ZOOM_MIN);
+        assert_eq!(sane_zoom(-3.0), ZOOM_MIN);
+        assert_eq!(sane_zoom(f32::NAN), 1.0);
+        assert_eq!(sane_zoom(f32::INFINITY), 1.0);
+    }
+
+    /// 老存档没有 zoom 字段，读出来该是 1 而不是 0——0 会让 `calc()` 算出
+    /// 0px 字号，整块正文直接看不见。
+    #[test]
+    fn 老存档没有字号倍率就按原样() {
+        let raw = r#"{"version":2,"corner":"br","panel_w":420,"panel_h":600}"#;
+        let d: Persisted = serde_json::from_str(raw).expect("老存档应该照样读得动");
+        assert_eq!((d.zoom, d.zoom_exp), (1.0, 1.0));
+    }
+
+    /// 两态各记各的，改一个不该动到另一个——这就是「不互相干扰」。
+    #[test]
+    fn 两态字号倍率互不影响() {
+        let mut d = Persisted::default();
+        d.zoom = 1.3;
+        assert_eq!(d.zoom_exp, 1.0);
+        d.zoom_exp = 0.8;
+        assert_eq!(d.zoom, 1.3);
+        // 换显示配置搬的是几何，倍率跟着眼睛走，不该被搬走。
+        d.stash_layout(UHD);
+        d.adopt_layout(FHD);
+        assert_eq!((d.zoom, d.zoom_exp), (1.3, 0.8));
     }
 
     /// 设了 HOVERNOTE_DIR 就一切照它来，主目录在哪儿都不管。
